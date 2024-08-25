@@ -11,7 +11,7 @@ import (
     "math"
 )
 
-func pixelsToImage(pixels [][]float64) {
+func pixelsToImage(pixels [][]float64, outFilepath string) {
     ROWS := len(pixels)
     COLS := len(pixels[0])
 
@@ -19,8 +19,6 @@ func pixelsToImage(pixels [][]float64) {
     lowRight := image.Point{COLS, ROWS}
     img := image.NewRGBA(image.Rectangle{upLeft, lowRight})
 
-    // Colors are defined by Red, Green, Blue, Alpha uint8 values.
-    // cyan := color.RGBA{100, 200, 200, 0xff}
     // find max intensity color 
     var maxIntensity uint32 = 0
     var minIntensity uint32 = 99999
@@ -38,20 +36,23 @@ func pixelsToImage(pixels [][]float64) {
     log.Printf("[INFO] maxIntensity: %v\n", maxIntensity)
     log.Printf("[INFO] minIntensity: %v\n", minIntensity)
 
-
     // Set color for each pixel.
     for r := 0; r < ROWS; r++ {
         for c := 0; c < COLS; c++ {
-            x := uint8(pixels[r][c])
+            x := uint8((pixels[r][c] - float64(minIntensity)) / float64(maxIntensity - minIntensity) * 0xff)
+            // x := uint8(pixels[r][c])
+            // random uint16 to uint8 conversion out of nowhere
+            // x := uint8(pixels[r][c] / 0xffff * 0xff)
             img.Set(c, r, color.RGBA{x, x, x, 0xff})
         }
     }
 
     // Encode as PNG.
-    f, _ := os.Create("image.png")
+    f, _ := os.Create(outFilepath)
     png.Encode(f, img)
 }
 
+// calculate gradient of grayscale image using sobel filter
 func grayscaleImageToGradient(pixels [][]float64) [][]float64 {
     var gradient [][]float64
     ROWS := len(pixels)
@@ -59,31 +60,30 @@ func grayscaleImageToGradient(pixels [][]float64) [][]float64 {
     for r := 0; r < ROWS; r++ {
         var row []float64
         for c := 0; c < COLS; c++ {
+            if r == 0 || c == 0 || r == ROWS - 1 || c == COLS - 1 {
+                row = append(row, 0)
+                continue
+            }
             var gy float64 = 0
             var gx float64 = 0
-            if r != 0 {
-                gy += pixels[r - 1][c]
-            } else {
-                gy += pixels[r][c]
-            }
+            // i dont know how to do matmul in go
+            gy += pixels[r - 1][c] * 2
+            gy += pixels[r - 1][c - 1]
+            gy += pixels[r - 1][c + 1]
 
-            if r != ROWS - 1 {
-                gy -= pixels[r + 1][c]
-            } else {
-                gy -= pixels[r][c]
-            }
+            gy -= pixels[r + 1][c] * 2
+            gy -= pixels[r + 1][c - 1]
+            gy -= pixels[r + 1][c + 1]
 
-            if c != 0 {
-                gx += pixels[r][c - 1]
-            } else {
-                gx += pixels[r][c]
-            }
+            gx += pixels[r][c - 1] * 2
+            gx += pixels[r - 1][c - 1]
+            gx += pixels[r + 1][c - 1]
 
-            if c != COLS - 1 {
-                gx -= pixels[r][c + 1]
-            } else {
-                gx -= pixels[r][c]
-            }
+
+            gx -= pixels[r][c + 1] * 2
+            gx -= pixels[r - 1][c + 1]
+            gx -= pixels[r + 1][c + 1]
+
             row = append(row, math.Sqrt(gx * gx + gy * gy))
         }
         gradient = append(gradient, row)
@@ -91,17 +91,15 @@ func grayscaleImageToGradient(pixels [][]float64) [][]float64 {
     return gradient
 }
 
-func rgbaToGrayscale(r, g, b, a uint32) float64 {
+func rgbaToGrayscale(r, g, b uint8) float64 {
     // some actual nerd told me to do this and was lying...
-    // Y = .2126 * R^gamma + .7152 * G^gamma + .0722 * B^gamma
-    // L* = 116 * Y ^ 1/3 - 16
-    // R := math.Pow(float64(r)/255, 1.0/3.0)
-    // G := math.Pow(float64(g)/255, 1.0/3.0)
-    // B := math.Pow(float64(b)/255, 1.0/3.0)
-    // y := .2126 * R + .7152 * G + .0722 * B * float64(a/a)
+    // log.Printf("%v, %v, %v, %v\n", r, g, b, a)
+    // R := math.Pow(float64(r)/0xff, 1.0/1.0)
+    // G := math.Pow(float64(g)/0xff, 1.0/1.0)
+    // B := math.Pow(float64(b)/0xff, 1.0/1.0)
+    // y := .2126 * R + .7152 * G + .0722 * B
     // l := 116 * math.Pow(y, 1.0/3.0) - 16
-    // appease the compiler
-    l := 0.299 * float64(r) + 0.587 * float64(g) + 0.114 * float64(b) + float64(a - a)
+    l := 0.299 * float64(r) + 0.587 * float64(g) + 0.114 * float64(b)
     return l
 }
 
@@ -113,7 +111,11 @@ func imageToGrayscale(imageData image.Image) [][]float64 {
     for r := 0; r < height; r++ {
         var row []float64
         for c := 0; c < width; c++ {
-            row = append(row, rgbaToGrayscale(imageData.At(c, r).RGBA()))
+            R, G, B, _ := imageData.At(c, r).RGBA()
+            R /= 0xff
+            G /= 0xff
+            B /= 0xff
+            row = append(row, rgbaToGrayscale(uint8(R), uint8(G), uint8(B)))
         }
         pixels = append(pixels, row)
     }
@@ -161,6 +163,7 @@ func main() {
 
     imageData := getImageData(imageFile, filepath)
     grayscaleImage := imageToGrayscale(imageData)
+    pixelsToImage(grayscaleImage, "grayscale.png")
     gradient := grayscaleImageToGradient(grayscaleImage)
-    pixelsToImage(gradient)
+    pixelsToImage(gradient, "gradient.png")
 }
